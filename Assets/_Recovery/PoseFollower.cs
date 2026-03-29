@@ -1,65 +1,159 @@
 using UnityEngine;
+using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 
-public class PoseFollower : MonoBehaviour
-{
-    [Header("右腕の骨")]
+///<summary>
+///MediaPipe等のポーズ推定結果（Point Annotation）をボーンに反映させるクラス
+///シングルトン化により、外部（生成側）からの座標注入にも対応
+///</summary>
+public class PoseFollower : MonoBehaviour{
+    public static PoseFollower Instance { get; private set; }
+
+    void Awake(){
+        //シングルトンの初期化と重複チェック
+        if(Instance!=null&&Instance!=this){
+            Destroy(gameObject);
+            return;
+        }
+        Instance=this;
+    }
+
+    //MediaPipe Pose ランドマークのインデックス定義
+    private const int LEFT_SHOULDER  =11;
+    private const int RIGHT_SHOULDER =12;
+    private const int LEFT_ELBOW     =13;
+    private const int RIGHT_ELBOW    =14;
+    private const int LEFT_WRIST     =15;
+    private const int RIGHT_WRIST    =16;
+    private const int REQUIRED_POINTS=17;
+
+    [Header("--- ボーン参照 ---")]
     public Transform rightUpperArm;
     public Transform rightLowerArm;
-    public Transform rightHand;
-
-    [Header("右人差し指 (Index)")]
-    public Transform rightIndex1; // 付け根
-    public Transform rightIndex2; // 第2関節
-    public Transform rightIndex3; // 第3関節
-
-    [Header("左腕の骨")]
     public Transform leftUpperArm;
     public Transform leftLowerArm;
-    public Transform leftHand;
 
-    void LateUpdate()
-    {
-        var points = GameObject.FindObjectsOfType<GameObject>()
-            .Where(o => o.name.Contains("Point Annotation"))
-            .OrderBy(o => o.transform.GetSiblingIndex())
-            .ToList();
+    [Header("--- Point Annotationの親 (任意) ---")]
+    [Tooltip("HierarchyのSolutionをドラッグ&ドロップ。未設定でも動きます。")]
+    public Transform pointsRoot;
 
-        // 指の先端（20番以降）までデータがあるか確認
-        if (points.Count > 20)
-        {
-            // --- 右腕 ---
-            UpdateArm(points[12].transform, points[14].transform, rightUpperArm, -140f);
-            UpdateArm(points[14].transform, points[16].transform, rightLowerArm, -140f);
-            UpdateArm(points[16].transform, points[20].transform, rightHand, -140f);
+    [Header("--- オフセット調整 (X=前後傾き, Y=ねじれ, Z=上下傾き) ---")]
+    public Vector3 rOffset=new Vector3(0f, 88.1f, -183.8f);
+    public Vector3 lOffset=new Vector3(0f, 59.8f, 33.4f);
 
-            // --- 右人差し指 (Poseの点 16, 18, 20 を活用) ---
-            // 付け根(16)から第2関節(18)の角度を適用
-            UpdateArm(points[16].transform, points[18].transform, rightIndex1, -140f);
-            // 第2関節(18)から指先(20)の角度を適用
-            UpdateArm(points[18].transform, points[20].transform, rightIndex2, -140f);
-            UpdateArm(points[18].transform, points[20].transform, rightIndex3, -140f);
+    [Range(0f, 1f)] public float smoothness = 0.2f;
 
-            // --- 左腕 ---
-            UpdateArm(points[11].transform, points[13].transform, leftUpperArm, -20f);
-            UpdateArm(points[13].transform, points[15].transform, leftLowerArm, -20f);
-            UpdateArm(points[15].transform, points[19].transform, leftHand, -20f);
+    private Transform[] _points=null;
+    private bool _isReady=false;
+
+    void Start(){
+        //pointsRootが設定されていれば効率的な検索を、なければ全体検索を開始
+        if(pointsRoot != null){
+            StartCoroutine(WaitForPointsUnderRoot());
+        }
+        else{
+            Debug.LogWarning("[PoseFollower] pointsRootが未設定です。FindObjectsOfTypeで検索します。");
+            StartCoroutine(WaitAndCacheFallback());
         }
     }
 
-    void UpdateArm(Transform start, Transform end, Transform bone, float offset)
-    {
-        if (bone == null) return;
+    ///<summary>
+    ///特定の親オブジェクト以下からPoint Annotationを探してキャッシュする
+    ///</summary>
+    IEnumerator WaitForPointsUnderRoot(){
+        while(!_isReady){
+            var found = pointsRoot
+                .GetComponentsInChildren<Transform>()
+                .Where(t=>t.name.Contains("Point Annotation"))
+                .OrderBy(t=>t.GetSiblingIndex())
+                .ToArray();
 
-        float diffX = end.position.x - start.position.x;
-        float diffY = end.position.y - start.position.y;
-        float diffZ = end.position.z - start.position.z;
+            if(found.Length>=REQUIRED_POINTS){
+                _points=found;
+                _isReady=true;
+                Debug.Log($"[PoseFollower] キャッシュ完了 (Root経由): {_points.Length}点");
+            }
+            else{
+                yield return new WaitForSeconds(0.5f);
+            }
+        }
+    }
 
-        float angleY = Mathf.Atan2(diffY, diffX) * Mathf.Rad2Deg;
-        float angleZ = Mathf.Atan2(diffZ, Mathf.Sqrt(diffX * diffX + diffY * diffY)) * Mathf.Rad2Deg;
+    ///<summary>
+    ///シーン全体からPoint Annotationを探してキャッシュする（Fallback用）
+    ///</summary>
+    IEnumerator WaitAndCacheFallback(){
+        while (!_isReady){
+            var found=FindObjectsOfType<GameObject>()
+                .Where(o=>o.name.Contains("Point Annotation"))
+                .OrderBy(o=>o.transform.GetSiblingIndex())
+                .ToArray();
 
-        // 指も腕と同じロジックで回転させます
-        Quaternion targetRotation = Quaternion.Euler(angleZ, 180, -angleY + offset);
-        bone.rotation = Quaternion.Lerp(bone.rotation, targetRotation, 0.1f);
+            if(found.Length>=REQUIRED_POINTS){
+                _points=found.Select(o => o.transform).ToArray();
+                _isReady=true;
+                Debug.Log($"[PoseFollower] キャッシュ完了 (Fallback): {_points.Length}点");
+            }
+            else{
+                yield return new WaitForSeconds(0.5f);
+            }
+        }
+    }
+
+    ///<summary>
+    ///外部の生成管理スクリプト等からポイント配列を直接受け取る
+    ///</summary>
+    public void SetPoints(Transform[] points){
+        if(points==null||points.Length<REQUIRED_POINTS){
+            Debug.LogWarning("[PoseFollower] SetPoints: 点数が不足しています");
+            return;
+        }
+        _points=points;
+        _isReady=true;
+        StopAllCoroutines(); //検索ループを停止
+        Debug.Log($"[PoseFollower] 外部からポイントを受け取りました: {_points.Length}点");
+    }
+
+    void LateUpdate(){
+        if(!_isReady){
+        return;
+        }
+
+        //右腕の計算
+        UpdateArm(_points[RIGHT_SHOULDER], _points[RIGHT_ELBOW], rightUpperArm, rOffset);
+        UpdateArm(_points[RIGHT_ELBOW], _points[RIGHT_WRIST], rightLowerArm, rOffset);
+        //左腕の計算
+        UpdateArm(_points[LEFT_SHOULDER], _points[LEFT_ELBOW], leftUpperArm, lOffset);
+        UpdateArm(_points[LEFT_ELBOW], _points[LEFT_WRIST], leftLowerArm, lOffset);
+    }
+
+    ///<summary>
+    ///startからendに向かうベクトルに基づいてboneの回転を更新
+    ///</summary>
+    void UpdateArm(Transform start, Transform end, Transform bone, Vector3 offset){
+        if(bone==null||start==null||end==null){
+        return;
+        }
+
+        Vector3 direction=end.position-start.position;
+        //ベクトルが小さすぎる場合は計算をスキップ（ジッタリング対策）
+        if(direction.sqrMagnitude<0.0001f){
+        return;
+        }
+
+        //2軸の回転角を算出
+        float angleY =Mathf.Atan2(direction.y, direction.x)*Mathf.Rad2Deg;
+        float angleZ =Mathf.Atan2(direction.z, Mathf.Sqrt(direction.x*direction.x+direction.y*direction.y))*Mathf.Rad2Deg;
+
+        //オフセットを加味してクォータニオンを生成
+        Quaternion targetRotation=Quaternion.Euler(
+            angleZ+offset.x,
+            180f+offset.y,
+            -angleY+offset.z
+        );
+
+        //smoothnessに基づいた滑らかな回転の適用
+        bone.rotation=Quaternion.Slerp(bone.rotation, targetRotation, smoothness);
     }
 }
