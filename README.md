@@ -39,3 +39,47 @@ LINQの排除:
 全身トラッキング:
 腕部だけでなく、下半身や腰の独立した動きを反映させるロジックの実装。
 
+
+・実装手順
+1. 動作環境
+・Unity 6 (または Unity 2021.3 LTS以上)
+・MediaPipe Unity Plugin v0.16.3 導入済み
+ダウンロード先(https://github.com/homuler/MediaPipeUnityPlugin)
+・UniVRM (VRM1.0用) 導入済み
+ダウンロード先(https://github.com/vrm-c/UniVRM)
+※モデルのインポートおよびVRM1.0規格の制御に使用します。
+
+2. インストール 
+このリポジトリをgit cloneするか、ZIPでダウンロードして解凍します。
+
+Unity Hubからプロジェクトを開きます。
+MediaPipe Unity Pluginが導入されていることを確認してください。
+もしエラーが出る場合は、公式のMediaPipe Unity Pluginの指示に従ってPackage Managerから再インストールが必要な場合があります。
+
+3. シーンの準備 
+Projectウィンドウから以下のパスにあるシーンを開きます。
+Assets/Samples/MediaPipe Unity Plugin/0.16.3/Official Solutions/Scenes/Pose/Pose Landmark Detection
+Hierarchyに自分のVRMモデル（HANA）を配置します。
+
+4. スクリプトの設定 
+配置したモデルにPoseFollower.csをアタッチします。
+
+Inspectorで以下の項目をドラッグ＆ドロップで設定します：
+・各関節のボーン: RightUpperArm,LeftUpperArmなど、対応するアバターのボーンを指定。
+・Offset調整:自分のアバターの初期姿勢に合わせて、Inspector上のスライダー（rUpperOffset 等）を動かして調整してください。
+
+5. 実行 
+Unityエディタの再生ボタンを押します。
+カメラに自分の全身が映るように立ちます。
+画面にPoint Annotation（白い点）が出現すると、アバターが連動して動き出します。
+
+・モデルが映らない場合: CameraのPriorityを -1 以上に設定し、Culling MaskがEverythingになっているか確認してください。
+・動きが逆になる場合:InspectorのOffset数値にマイナスを入れて調整してください。
+・シーン移動時の保存: シーンを切り替える際は、変更が失われないよう必ずSaveを選択してください。
+
+
+
+
+
+
+
